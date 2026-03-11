@@ -174,5 +174,103 @@ def login_user(identifier, plain_password):
     finally:
         conn.close()
 
+
+def get_current_task(user_id):
+    """
+    Pobiera dane aktualnego zadania dla gracza o podanym ID.
+    Zwraca słownik z danymi zadania lub None, jeśli gracz ukończył wszystkie zadania.
+    """
+    conn = create_connection()
+    if conn is None: return None
+    cursor = conn.cursor()
+
+    try:
+        # 1. Łączymy tabelę Stan_Gracza z tabelą Zadania, aby pobrać szczegóły
+        cursor.execute("""
+                       SELECT Z.punkty, Z.slowo_startowe, Z.slowo_docelowe, Z.dlugosc_linii, Z.czas_wykonania
+                       FROM Stan_Gracza S
+                                JOIN Zadania Z ON S.id_aktualnego_zadania = Z.id_zadania
+                       WHERE S.id_uzytkownika = ?
+                       """, (user_id,))
+
+        row = cursor.fetchone()
+
+        if row:
+            return {
+                "punkty": row,
+                "word": row[3],  # Zmienna word w game::start
+                "to_word": row[4],  # Zmienna to_word w game::start
+                "length": row[2],  # Zmienna length w game::start
+                "time": row[5]  # Zmienne timek/timer w game::start
+            }
+        return None  # Brak kolejnych zadań lub błędne ID
+
+    finally:
+        conn.close()
+
+
+def verify_player_movements(user_id, moves_list):
+    """
+    Weryfikuje, czy lista ruchów (.s_str()) prowadzi do ułożenia zadania.
+    Zwraca True i przyznaje punkty, lub False przy błędzie.
+    """
+    # 1. Pobierz dane aktualnego zadania dla gracza
+    task = get_current_task(user_id)
+    if not task:
+        return False
+
+    current_word = list(task['word'])
+    target_word = task['to_word']
+    line_length = task['length']
+    grid = [current_word[i:i + length] for i in range(0, len(current_word), length)]
+    # 2. Odtwarzanie ruchów (Emulator logiki z C++)
+    for move in moves_list:
+        # Przykładowa interpretacja move (np. "R1" - przesunięcie wiersza 1 w prawo)
+        current_word = apply_logic_move(grid, move, line_length)
+    current_word=[]
+    for i in grid:
+        current_word+=i
+    current_word="".join(current_word)
+    # 3. Sprawdzenie wyniku
+    if current_word == target_word:
+        # Jeśli się zgadza, zaktualizuj postęp gracza
+        return complete_task(user_id, task['punkty'])
+
+    return False
+
+
+def apply_logic_move(state, move_str, length):
+    """
+    Tu implementujesz logikę przesunięć, którą masz w lambdach w C++.
+    state: lista znaków słowa
+    move_str: dane z obiektu moved.s_str()
+    """
+    move_str=move_str[:-1].split("|")
+    x:int=int(move_str[2])
+    y:int=int(move_str[3])
+    if (move_str[1]=="r"):
+        state[x][y],state[x+1][y],state[x+1][y+1],state[x][y+1]=state[x][y+1],state[x][y],state[x+1][y],state[x+1][y+1]
+    elif (move_str[1]=="l"):
+        state[x][y], state[x + 1][y], state[x + 1][y + 1], state[x][y + 1] =state[x+1][y],state[x+1][y+1],state[x][y+1],state[x][y]
+    return state
+
+
+
+def complete_task(user_id, points_to_add):
+    conn = create_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+                       UPDATE Stan_Gracza
+                       SET id_aktualnego_zadania = id_aktualnego_zadania + 1,
+                           suma_punktow          = suma_punktow + ?
+                       WHERE id_uzytkownika = ?
+                       """, (points_to_add, user_id))
+        conn.commit()
+        return True
+    except:
+        return False
+    finally:
+        conn.close()
 if __name__ != '__main__':
     setup_database()
