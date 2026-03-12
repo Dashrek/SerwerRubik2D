@@ -1,16 +1,24 @@
-# This is a sample Python script.
+import socket
+import threading
+import CreateDataBase
+commands={
+    -1: "Użytkownik nie istnieje!",
+    -2: "Błędne Hasło!",
+    -4: "Błąd połączenia z bazą danych!"
+}
 
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
+def handle_client(conn, addr):
+    while True:
+        data = conn.recv(1024).decode().strip()
+        if not data: break
 
+        parts = data.split(';')
+        cmd = parts
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
-
-
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+        if cmd == "LOGIN":
+            # Wywołanie: result = db.check_login(parts[4], parts[5])
+            conn.send(f"LOGIN_OK;{result}\n".encode())
+        elif cmd == "GET_TASK":
+            # Wywołanie: task = db.get_random_task()
+            conn.send(f"TASK;{task['id']};{task['word']};{task['target']};{task['len']}\n".encode())
+    conn.close()
