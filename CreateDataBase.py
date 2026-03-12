@@ -2,6 +2,7 @@ import sqlite3
 import csv
 import hashlib
 import time
+import os
 
 def import_ranking_from_csv(file_path):
     """Importuje przykłady z pliku CSV do tabeli Ranking_Gry."""
@@ -40,31 +41,48 @@ def create_connection(db_file="rubik_game.db"):
     except sqlite3.Error as e:
         print(f"Błąd połączenia: {e}")
     return conn
-def setup_database():
-    """Tworzy strukturę bazy danych dostosowaną do progresywnego systemu zadań."""
+
+def current_points(user_id):
     conn = create_connection()
-    if conn is not None:
+    if conn is None: return ""
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+                       SELECT punkty
+                       FROM Stan_Gracza 
+                       WHERE id_uzytkownika = ?
+                       """, (user_id,))
+        row = cursor.fetchone()[0]
+        return row
+    finally:
+        conn.close()
+def setup_database():
+    # Sprawdzenie, czy plik fizycznie istnieje na dysku
+    if not os.path.exists("./rubik_game.db"):
+        print("[BAZA] Plik ./rubik_game.db nie istnieje. Inicjalizacja...")
+        conn = create_connection()
         cursor = conn.cursor()
 
         # Tabela 1: Dane kont (zintegrowane z Projekt_It)
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS Gracze (
-                id_uzytkownika INTEGER PRIMARY KEY AUTOINCREMENT,
-                nazwa TEXT UNIQUE NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                hash_hasla TEXT NOT NULL
-            );
-        """)
+                       CREATE TABLE IF NOT EXISTS Gracze
+                       (
+                           id_uzytkownika INTEGER PRIMARY KEY AUTOINCREMENT,
+                           nazwa          TEXT UNIQUE NOT NULL,
+                           email          TEXT UNIQUE NOT NULL,
+                           hash_hasla     TEXT        NOT NULL
+                       );
+                       """)
 
         # Tabela 2: Biblioteka zadań (pobierana z CSV)
         cursor.execute("""
                        CREATE TABLE IF NOT EXISTS Zadania
                        (
-                           id_zadania INTEGER PRIMARY KEY AUTOINCREMENT,
-                           punkty INTEGER NOT NULL,
-                           slowo_startowe TEXT NOT NULL,
-                           slowo_docelowe TEXT NOT NULL,
-                           dlugosc_linii INTEGER NOT NULL,
+                           id_zadania     INTEGER PRIMARY KEY AUTOINCREMENT,
+                           punkty         INTEGER NOT NULL,
+                           slowo_startowe TEXT    NOT NULL,
+                           slowo_docelowe TEXT    NOT NULL,
+                           dlugosc_linii  INTEGER NOT NULL,
                            czas_wykonania TEXT DEFAULT ""
                        );
                        """)
@@ -72,18 +90,22 @@ def setup_database():
         # Tabela 3: Aktualny stan i postęp gracza (id gracza; aktualne zadanie)
         # Cascade usuwa postępy, gdy gracz zostanie usunięty.
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS Stan_Gracza (
-                id_uzytkownika INTEGER PRIMARY KEY,
-                id_aktualnego_zadania INTEGER DEFAULT 1,
-                suma_punktow INTEGER DEFAULT 0,
-                FOREIGN KEY (id_uzytkownika) REFERENCES Gracze(id_uzytkownika) ON DELETE CASCADE,
-                FOREIGN KEY (id_aktualnego_zadania) REFERENCES Zadania(id_zadania)
-            );
-        """)
+                       CREATE TABLE IF NOT EXISTS Stan_Gracza
+                       (
+                           id_uzytkownika        INTEGER PRIMARY KEY,
+                           id_aktualnego_zadania INTEGER DEFAULT 1,
+                           suma_punktow          INTEGER DEFAULT 0,
+                           FOREIGN KEY (id_uzytkownika) REFERENCES Gracze (id_uzytkownika) ON DELETE CASCADE,
+                           FOREIGN KEY (id_aktualnego_zadania) REFERENCES Zadania (id_zadania)
+                       );
+                       """)
 
         conn.commit()
         conn.close()
         print("Baza danych z systemem zadań została utworzona.")
+    else:
+        print("[BAZA] Znaleziono istniejącą bazę danych. Ładowanie...")
+
 def add_task_from_cmd(input_string):
     """Format: punkty;start;docelowe;dlugosc;czas"""
     conn = create_connection()
@@ -124,7 +146,7 @@ def register_user(nickname, email, plain_password):
 
         if nick_taken and email_taken: return -3
         if nick_taken: return -1
-        if email_taken: return -2
+        if email_taken: return -5
 
         # Zapisanie hasha zamiast jawnego hasła
         cursor.execute("""
@@ -194,16 +216,20 @@ def get_current_task(user_id):
                        """, (user_id,))
 
         row = cursor.fetchone()
-
+        cursor.execute("""
+        Select id_aktualnego_zadania from Stan_Gracza where id_uzytkownika = ?
+        """, (user_id,))
+        row1 = cursor.fetchone()[0]
         if row:
             return {
                 "punkty": row,
                 "word": row[3],  # Zmienna word w game::start
                 "to_word": row[4],  # Zmienna to_word w game::start
                 "length": row[2],  # Zmienna length w game::start
-                "time": row[5]  # Zmienne timek/timer w game::start
+                "time": row[5],  # Zmienne timek/timer w game::start
+                "id_zadania":row1
             }
-        return None  # Brak kolejnych zadań lub błędne ID
+        return -6  # Brak kolejnych zadań lub błędne ID
 
     finally:
         conn.close()
@@ -222,7 +248,7 @@ def verify_player_movements(user_id, moves_list):
     current_word = list(task['word'])
     target_word = task['to_word']
     line_length = task['length']
-    grid = [current_word[i:i + length] for i in range(0, len(current_word), length)]
+    grid = [current_word[i:i + line_length] for i in range(0, len(current_word), line_length)]
     # 2. Odtwarzanie ruchów (Emulator logiki z C++)
     for move in moves_list:
         # Przykładowa interpretacja move (np. "R1" - przesunięcie wiersza 1 w prawo)
