@@ -106,6 +106,51 @@ def setup_database():
     else:
         print("[BAZA] Znaleziono istniejącą bazę danych. Ładowanie...")
 
+
+def get_ranking(user_id):
+    """
+    Pobiera top 10 graczy oraz pozycję i punkty gracza o danym user_id.
+    Zwraca sformatowany string gotowy do wysłania: RANKING;1:Nick:Pts;...;YOUR_POS:Pos:Pts
+    """
+    conn = create_connection()
+    if conn is None: return "RANKING_ERROR;DB_CONN"
+
+    cursor = conn.cursor()
+    try:
+        # 1. Pobranie Top 10 graczy z tabel Gracze i Stan_Gracza [1]
+        cursor.execute("""
+                       SELECT g.nazwa, s.suma_punktow
+                       FROM Gracze g
+                                JOIN Stan_Gracza s ON g.id_uzytkownika = s.id_uzytkownika
+                       ORDER BY s.suma_punktow DESC LIMIT 10
+                       """)
+        top_10 = cursor.fetchall()
+
+        # 2. Wyliczenie pozycji gracza i jego punktów
+        cursor.execute("""
+                       SELECT (SELECT COUNT(*) + 1 FROM Stan_Gracza WHERE suma_punktow > s.suma_punktow),
+                              s.suma_punktow
+                       FROM Stan_Gracza s
+                       WHERE s.id_uzytkownika = ?
+                       """, (user_id,))
+        user_info = cursor.fetchone()
+
+        # 3. Formatowanie odpowiedzi zgodnie z protokołem komunikacyjnym [1, 2]
+        rank_list = []
+        for i, (nick, pts) in enumerate(top_10, 1):
+            rank_list.append(f"{i}:{nick}:{pts}")
+
+        response = "RANKING;" + ";".join(rank_list)
+
+        if user_info:
+            response += f";YOUR_POS:{user_info}:{user_info[3]}"
+
+        return response
+    except Exception as e:
+        print(f"[BŁĄD RANKINGU] {e}")
+        return "RANKING_ERROR"
+    finally:
+        conn.close()
 def add_task_from_cmd(input_string):
     """Format: punkty;start;docelowe;dlugosc;czas"""
     conn = create_connection()
@@ -117,7 +162,7 @@ def add_task_from_cmd(input_string):
             cursor.execute("""
                 INSERT INTO Zadania (punkty, slowo_startowe, slowo_docelowe, dlugosc_linii, czas_wykonania)
                 VALUES (?, ?, ?, ?, ?)
-            """, (int(data[0]), data[2], data[3], int(data[1]), data[4]))
+            """, (int(data[0]), data[1], data[2], int(data[3]), data[4]))
             conn.commit()
             print("Zadanie z czasem dodane.")
     except Exception as e:

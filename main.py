@@ -77,7 +77,10 @@ def handle_client(conn, addr):
 
                 elif cmd == "GET_RANKING":
                     # RANKING;pos:nick:pts;...;YOUR_POS:m:pts
-                    conn.send("RANKING;1:Darek:1000;2:Ania:800;YOUR_POS:15:250\n".encode())
+                    if user_id!="":
+                        conn.send(get_ranking(user_id).encode())
+
+
 
                 elif cmd == "LOGOUT":
                     connected = False
