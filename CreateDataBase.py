@@ -48,7 +48,7 @@ def current_points(user_id):
     cursor = conn.cursor()
     try:
         cursor.execute("""
-                       SELECT punkty
+                       SELECT suma_punktow
                        FROM Stan_Gracza 
                        WHERE id_uzytkownika = ?
                        """, (user_id,))
@@ -107,17 +107,17 @@ def setup_database():
         print("[BAZA] Znaleziono istniejącą bazę danych. Ładowanie...")
 
 
+
 def get_ranking(user_id):
     """
-    Pobiera top 10 graczy oraz pozycję i punkty gracza o danym user_id.
-    Zwraca sformatowany string gotowy do wysłania: RANKING;1:Nick:Pts;...;YOUR_POS:Pos:Pts
+    Pobiera ranking 10 najlepszych i pozycję gracza.
+    Obsługuje błędy braku ID (np. przy 'GET_RANKING;' z netcata).
     """
     conn = create_connection()
-    if conn is None: return "RANKING_ERROR;DB_CONN"
-
+    if conn is None: return "RANKING_ERROR"
     cursor = conn.cursor()
     try:
-        # 1. Pobranie Top 10 graczy z tabel Gracze i Stan_Gracza [1]
+        # 1. Top 10 - upewnij się, że wybierasz DWA pola: nazwa i suma_punktow
         cursor.execute("""
                        SELECT g.nazwa, s.suma_punktow
                        FROM Gracze g
@@ -126,7 +126,7 @@ def get_ranking(user_id):
                        """)
         top_10 = cursor.fetchall()
 
-        # 2. Wyliczenie pozycji gracza i jego punktów
+        # 2. Pozycja gracza - upewnij się, że wybierasz pozycję i punkty
         cursor.execute("""
                        SELECT (SELECT COUNT(*) + 1 FROM Stan_Gracza WHERE suma_punktow > s.suma_punktow),
                               s.suma_punktow
@@ -135,15 +135,19 @@ def get_ranking(user_id):
                        """, (user_id,))
         user_info = cursor.fetchone()
 
-        # 3. Formatowanie odpowiedzi zgodnie z protokołem komunikacyjnym [1, 2]
+        # 3. Budowanie odpowiedzi - bezpieczna iteracja
         rank_list = []
-        for i, (nick, pts) in enumerate(top_10, 1):
-            rank_list.append(f"{i}:{nick}:{pts}")
+        for i, row in enumerate(top_10, 1):
+            # row[0] to nazwa, row[1] to punkty
+            rank_list.append(f"{i}:{row[0]}:{row[1]}")
 
-        response = "RANKING;" + ";".join(rank_list)
+        response = "RANKING;" +f"{len(rank_list)};"+";".join(rank_list)
 
-        if user_info:
-            response += f";YOUR_POS:{user_info}:{user_info[3]}"
+        # 4. Sprawdzenie czy user_info nie jest None (ważne przy błędnym ID z netcata)
+        if user_info and len(user_info) >= 2:
+            response += f";YOUR_POS:{user_info[0]}:{user_info[1]}\n"
+        else:
+            response += ";YOUR_POS:?:0"
 
         return response
     except Exception as e:
@@ -261,17 +265,19 @@ def get_current_task(user_id):
                        """, (user_id,))
 
         row = cursor.fetchone()
+        print(row)
         cursor.execute("""
         Select id_aktualnego_zadania from Stan_Gracza where id_uzytkownika = ?
         """, (user_id,))
         row1 = cursor.fetchone()[0]
+        print(row1)
         if row:
             return {
-                "punkty": row,
-                "word": row[3],  # Zmienna word w game::start
-                "to_word": row[4],  # Zmienna to_word w game::start
-                "length": row[2],  # Zmienna length w game::start
-                "time": row[5],  # Zmienne timek/timer w game::start
+                "punkty": row[0],
+                "word": row[1],  # Zmienna word w game::start
+                "to_word": row[2],  # Zmienna to_word w game::start
+                "length": row[3],  # Zmienna length w game::start
+                "time": row[4],  # Zmienne timek/timer w game::start
                 "id_zadania":row1
             }
         return -6  # Brak kolejnych zadań lub błędne ID
@@ -302,6 +308,7 @@ def verify_player_movements(user_id, moves_list):
     for i in grid:
         current_word+=i
     current_word="".join(current_word)
+    print(current_word)
     # 3. Sprawdzenie wyniku
     if current_word == target_word:
         # Jeśli się zgadza, zaktualizuj postęp gracza
@@ -316,7 +323,7 @@ def apply_logic_move(state, move_str, length):
     state: lista znaków słowa
     move_str: dane z obiektu moved.s_str()
     """
-    move_str=move_str[:-1].split("|")
+    move_str=move_str.split("|")
     x:int=int(move_str[2])
     y:int=int(move_str[3])
     if (move_str[1]=="r"):
@@ -326,6 +333,38 @@ def apply_logic_move(state, move_str, length):
     return state
 
 
+def register_out(user_id, plain_password):
+    """
+    Usuwa konto użytkownika na podstawie ID po potwierdzeniu hasłem.
+    Zwraca: 1 (sukces), -1 (błędne hasło/ID), -4 (błąd bazy).
+    """
+    conn = create_connection()
+    if conn is None: return -4
+
+    # Włączenie kluczy obcych, aby zapewnić integralność
+    conn.execute("PRAGMA foreign_keys = ON;")
+
+    # Hashujemy hasło do porównania (zgodnie z register_user)
+    password_hash = hashlib.sha256(plain_password.encode()).hexdigest()
+
+    cursor = conn.cursor()
+    try:
+        # 1. Weryfikacja: czy gracz o tym ID ma takie hasło?
+        cursor.execute("SELECT 1 FROM Gracze WHERE id_uzytkownika = ? AND hash_hasla = ?", (user_id, password_hash))
+        if cursor.fetchone() is None:
+            return -2
+
+        # 2. Usuwanie rekordów (najpierw stan, potem gracz)
+        cursor.execute("DELETE FROM Stan_Gracza WHERE id_uzytkownika = ?", (user_id,))
+        cursor.execute("DELETE FROM Gracze WHERE id_uzytkownika = ?", (user_id,))
+
+        conn.commit()
+        return -7
+    except Exception as e:
+        print(f"[BŁĄD REGISTER_OUT] {e}")
+        return -4
+    finally:
+        conn.close()
 
 def complete_task(user_id, points_to_add):
     conn = create_connection()
@@ -339,7 +378,8 @@ def complete_task(user_id, points_to_add):
                        """, (points_to_add, user_id))
         conn.commit()
         return True
-    except:
+    except Exception as e:
+        print(f"[BŁĄD UPDATE Stan_Gracza] {e}")
         return False
     finally:
         conn.close()
